@@ -1,0 +1,71 @@
+Please read ldap.h and asn1.h for an overview of the API.
+
+Example code using the high level API is in tinyldap and ldapclient.
+This will be encapsulated some more eventually.
+
+ldapclient is the client test application.  It connects to localhost,
+makes a BindRequest and dumps the BindResponse in human readable form.
+
+tinyldap is the server test application.  It understands BindRequest,
+SearchRequest, ModifyRequest, AddRequest, and DelRequest. It does not
+yet support ModifyDNRequest.
+
+tinyldap now supports an external database representation with indexes.
+Use "parse" to create the file "data" from an LDIF file called
+"exp.ldif" (I can't give you my test data, sorry).  Then use "addindex"
+to add indexes if you like.  To make an index case insentive (and the
+corresponding attribute, too), pass an "i" in third command line
+argument to addindex (e.g.  "./addindex data sn i").  addindex also
+supports a second index type, where the offset table also contains the
+record number (will save run time, but the index is twice as large).  To
+enable it, pass a "f" in the third command line argument.  So, to have a
+fast case-insensitive index, use "if" or "fi" as third argument to
+addindex.
+
+Use "dumpidx" to have the contents of data displayed on screen.
+tinyldap has been modified to use data instead of the in-memory linked
+list.
+
+Do _not_ add an index for objectClass!  It will not work!
+
+parse will now normalize dn before writing it to the index.  That means
+that the attribute names in dn are lowercased, ';' is converted to ','
+and spaces after ';' or ',' are removed.
+
+tinyldap supports authentication.  To use this, you must add an index
+for "dn".  Most programs check by an attribute called "uid", so you
+should have that as well, and put the password into an attribute called
+"userPassword".  By convention, the attribute "homeDirectory" contains
+$HOME for that user.  tinyldap support three kinds of passwords here:
+
+  - straight MD5
+    I think I took this scheme from OpenLDAP.  It's just the straight
+    MD5 without salt but expressed as base64 not hex (as md5sum outputs
+    it).  Example:
+    userPassword: {MD5}CY9rzUYh03PK3k6DJie09g==
+    You can use "md5password" (part of the tinyldap distribution) to
+    calculate these passwords.
+
+    NOTE: MD5 is insecure and this method uses no salt. If you have a
+    choice, never use it!
+
+  - crypt(3)
+    This means you can simply copy the password from /etc/shadow.
+    If your libc supports MD5 passwords in crypt (diet libc does, glibc
+    does, all the free BSDs do; you can know them by the "$1$" at the
+    start), this is actually more secure than the straight MD5 above.
+    However, the ldif and data files are then not portable to tinyldap
+    running on another OS without MD5 support in crypt.  Same goes for
+    blowfish or other obscure algorithms your crypt(3) may or may not
+    support.  Example:
+    userPassword: a4FGJQkF1FYY2
+
+  - plain text password
+    You can also simply put the password in plain text in the ldif.
+    userPassword: test
+    This is NOT advisable, because tinyldap does not support ACLs yet!
+    That means everyone can read everyone's passwords.  The MD5 above
+    provides at least moderate protection.
+
+This code has been tested against pam_ldap and an ldap checkpassword I
+wrote for a customer.

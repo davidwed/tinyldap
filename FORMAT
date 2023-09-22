@@ -1,0 +1,98 @@
+Data format for a read-only LDAP data store.  LDAP defines access to
+records, each of them having n attributes.  Mandatory attributes are
+"dn" and "objectClass".
+
+The string table stores all strings, zero-terminated.  Binary records
+are stored as empty string (single zero byte) followed by a
+(uint32_t length,uint8_t data[]) tuple.
+
+An Index is an array of uint32_t, each an offset inside the file to the
+corresponding string.
+
+Each Record is an array of uint32_t, each an offset inside the file to
+the corresponding string.  Entries are in pairs, where the first
+uint32_t points to the attribute name, the second points to the
+attribute value.  Each record starts with a pair <number-of-attributes,0>.
+The number of attributes equals the number of 64-bit pairs (including
+this length pair itself).  The second pair is
+<value-of-dn,value-of-objectClass>, the following pairs are all
+<name-of-attribute,value-of-attribute>.
+
+The Record Index is a table of offsets to the corresponding record.
+
+All integers are stored LITTLE ENDIAN.
+
+  const uint32_t magic = 0xfefe1da9;  /* 1da9 == "LDAP" ;-) */
+  uint32_t attribute_count, record_count, indices_offset, size_of_string_table;
+  char string_table[size_of_string_table];
+  uint32_t attribute_names[attribute_count];
+  uint32_t attribute_flags[attribute_count];  /* 1: match case insensitively */
+  uint32_t records[record_count][];  /* in the same order as the records
+                                        are physically on disk */
+/* indices_offset points here */
+  uint32_t record_index[record_count];
+  struct {
+    uint32_t index_type;  /* 0 == sorted array of pointers,
+			     1 == sorted array of (pointer,record number) tuples,
+			          faster but twice as large; this is actually saved
+				  as two arrays, one for the pointers and one for
+				  the numbers, for cache performance reasons.
+			     2 == ACL data
+			     3 == hash index (only useful for dn)
+			     rest reserved */
+    uint32_t next;        /* offset of next index */
+    /* for index_type==0: */
+    uint32_t indexed_attribute; /* offset of attribute name */
+    uint32_t record_offsets[record_count];
+    /* for index_type==1: */
+    uint32_t indexed_attribute;
+    uint32_t record_offsets[record_count];
+    uint32_t record_number[record_count];
+    /* for index_type==2 see file "ACL" */
+    /* for index_type==3: */
+    uint32_t indexed_attribute;
+    uint32_t hash_table_size;	/* in uint32_t, not in bytes! */
+    uint32_t hash_table[hash_table_size];
+    uint32_t lists[];
+      /* if a hash table entry is 0, return not found. */
+      /* if a hash table entry is a number smaller than the offset of
+	 this index, there is exactly one record matching this hash, and
+	 the entry contains the number of the record. */
+      /* if a hash table entry is larger than the offset of this index,
+	 there were hash collisions;  The first uint32_t at the offset
+	 is the length of the list, the rest are the record numbers */
+  }
+
+The indices are at the end to make it possible to add more indices.
+The next pointer is there to make extensions possible.
+
+
+
+How do we do ACLs?
+
+The goal is to reduce the number of ACLs that need to be checked.
+We have a 0 dword reserved in each record.  The obvious use would be to
+store a pointer to a list of permissions in each record.  The question is: do
+we store the list of ACLs that is valid if you authenticate as that dn, or do
+we store the list of ACLs that needs to be checked if anyone accesses
+that dn?  I think it's better to store the permissions if anyone logs in
+as that dn; the general user only has very simple access rules, so that
+would keep the ACLs for the common case down.  On the down side we need
+to store the permissions for the anonymous bind somewhere, too.  It also
+means we optimize away the openldap "group member" indirection.
+
+The question is: how do we store the ACLs in the database?  I suggest a
+model where we store the auth ACLs first, then the read ACLs, then the
+write ACLs.  That way you can stop evaluating at the first write ACL
+when you only want to read.  And normally the bulk of the ACLs are for
+writing.
+
+So, for each dn and access type we need to keep a list of
+(dn-pattern,attribute[]) that this dn has access to.
+
+  uint32_t auth_count;
+
+The syntax of the list should be:
+  uint32_t attributes[];  /* offsets of attribute names in stringtab,
+			     terminated by 0.  Empty list means: all */
+
